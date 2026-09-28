@@ -63,14 +63,10 @@ jobs:
             echo "Installing TazLito..."
             tazpkg get-install tazlito
 
-            echo "Installing ISO tools..."
-            if ! command -v genisoimage >/dev/null 2>&1; then
-              tazpkg get-install cdrkit
-            fi
+            echo "Installing ISO creation tools..."
+            tazpkg get-install cdrkit
 
-            if ! command -v isohybrid >/dev/null 2>&1; then
-              tazpkg get-install syslinux || true
-            fi
+            tazpkg get-install syslinux || true
 
             echo "Checking ISO tools..."
             command -v genisoimage
@@ -112,9 +108,9 @@ jobs:
             echo "tinyos" > /etc/hostname
 
             cat > /etc/os-release << "EOF"
-            PRETTY_NAME="TinyOS"
-            NAME="TinyOS"
-            ID=tinyos
+            PRETTY_NAME="MEGHRAJ OS"
+            NAME="MEGHRAJ OS"
+            ID=meghrajos
             VERSION="0.1"
             VERSION_ID="0.1"
             ID_LIKE=slitaz
@@ -150,7 +146,7 @@ jobs:
                 <followMouse>no</followMouse>
                 <focusLast>yes</focusLast>
                 <underMouse>no</underMouse>
-                <lastFocusNewWindow>no</lastFocusNewWindow>
+                <lastFocusNewWindow>yes</lastFocusNewWindow>
               </focus>
 
               <placement>
@@ -159,22 +155,24 @@ jobs:
 
               <mouse>
                 <context name="Root">
+
                   <mousebind button="Right" action="Press">
                     <action name="ShowMenu">
                       <menu>root-menu</menu>
                     </action>
                   </mousebind>
+
                 </context>
               </mouse>
-
-              <menu>
-                <file>/etc/xdg/openbox/menu.xml</file>
-              </menu>
 
               <desktops>
                 <number>1</number>
                 <firstdesk>1</firstdesk>
               </desktops>
+
+              <menu>
+                <file>/etc/xdg/openbox/menu.xml</file>
+              </menu>
 
             </openbox_config>
             EOF
@@ -208,6 +206,14 @@ jobs:
 
                 <separator />
 
+                <item label="MEGHRAJ OS">
+                  <action name="Execute">
+                    <command>xterm -title "MEGHRAJ OS"</command>
+                  </action>
+                </item>
+
+                <separator />
+
                 <item label="Reboot">
                   <action name="Execute">
                     <command>reboot</command>
@@ -229,10 +235,19 @@ jobs:
 
             cat > /usr/bin/firefox-start << "EOF"
             #!/bin/sh
-            exec startx
+            exec firefox
             EOF
 
             chmod +x /usr/bin/firefox-start
+
+            echo "Creating TinyOS terminal launcher..."
+
+            cat > /usr/bin/meghraj-terminal << "EOF"
+            #!/bin/sh
+            exec xterm -title "MEGHRAJ OS"
+            EOF
+
+            chmod +x /usr/bin/meghraj-terminal
 
             echo "Cleaning unnecessary files..."
 
@@ -254,98 +269,152 @@ jobs:
           ./tazlab run x86_64 '
             set -e
 
-            echo "Checking ISO generator..."
+            SOURCE_ISO="/home/slitaz/iso/slitaz-base-x86_64-cooking.iso"
 
-            command -v genisoimage
+            echo "Source ISO:"
+            echo "$SOURCE_ISO"
 
-            if command -v isohybrid >/dev/null 2>&1; then
-              echo "isohybrid is available."
-            else
-              echo "WARNING: isohybrid not available."
+            if [ ! -f "$SOURCE_ISO" ]; then
+              echo "ERROR: Source SliTaz ISO not found."
+              exit 1
             fi
 
-            echo "Building TinyOS ISO..."
+            echo "Preparing source ISO mount..."
 
-            rm -f /home/slitaz/distro/TinyOS.iso
-            rm -f /home/slitaz/distro/TinyOS.md5
+            mkdir -p /media/cdrom
+
+            if mountpoint -q /media/cdrom; then
+              umount /media/cdrom
+            fi
+
+            mount -o loop,ro "$SOURCE_ISO" /media/cdrom
+
+            echo "Checking boot files..."
+
+            ls -la /media/cdrom/boot || true
+            ls -la /media/cdrom/boot/isolinux || true
+
+            if [ ! -d /media/cdrom/boot/isolinux ]; then
+              echo "ERROR: Source ISO does not contain the required isolinux directory."
+              exit 1
+            fi
+
+            echo "Unmounting TazLab shared distro directory..."
+
+            if mountpoint -q /home/slitaz/distro; then
+              umount /home/slitaz/distro
+            fi
+
+            rm -rf /home/slitaz/distro
+            mkdir -p /home/slitaz/distro
+
+            echo "Preparing ISO output directory..."
+
+            mkdir -p /home/slitaz/iso
+
+            rm -f /home/slitaz/iso/TinyOS.iso
+            rm -f /home/slitaz/iso/TinyOS.md5
+
+            echo "Running TazLito..."
 
             LaunchedByTazpanel=1 \
               tazlito writeiso lzma TinyOS
 
-            echo "Checking generated ISO..."
+            echo "Checking TazLito output..."
 
             if [ ! -f /home/slitaz/distro/TinyOS.iso ]; then
-              echo "ERROR: TinyOS.iso was not created."
+              echo "ERROR: TazLito did not create TinyOS.iso."
 
+              echo "Distro directory:"
               find /home/slitaz/distro \
                 -maxdepth 3 \
                 -type f \
-                -exec ls -lh {} \;
+                -print 2>/dev/null || true
 
               exit 1
             fi
 
             SIZE=$(stat -c "%s" /home/slitaz/distro/TinyOS.iso)
 
-            echo "ISO size: $SIZE bytes"
+            echo "Generated ISO size:"
+            echo "$SIZE bytes"
 
             if [ "$SIZE" -lt 1000000 ]; then
               echo "ERROR: ISO is suspiciously small."
-
               exit 1
             fi
 
-            echo "TinyOS ISO created successfully."
+            echo "Copying final ISO to shared GitHub directory..."
 
-            ls -lh /home/slitaz/distro/TinyOS.iso
+            cp -f \
+              /home/slitaz/distro/TinyOS.iso \
+              /home/slitaz/iso/TinyOS.iso
+
+            cp -f \
+              /home/slitaz/distro/TinyOS.md5 \
+              /home/slitaz/iso/TinyOS.md5 \
+              2>/dev/null || true
+
+            echo "Final ISO:"
+            ls -lh /home/slitaz/iso/TinyOS.iso
+
+            echo "Unmounting source ISO..."
+
+            umount /media/cdrom || true
           '
 
-      - name: Verify ISO
+      - name: Verify generated ISO
         run: |
-          ISO="$GITHUB_WORKSPACE/.slitaz/x86_64/distro/TinyOS.iso"
+          ISO="$GITHUB_WORKSPACE/.slitaz/iso/TinyOS.iso"
+
+          echo "Checking final ISO:"
+          echo "$ISO"
 
           if [ ! -f "$ISO" ]; then
-            echo "ERROR: TinyOS ISO not found."
+            echo "ERROR: TinyOS.iso was not created."
 
-            find "$GITHUB_WORKSPACE/.slitaz" \
+            echo "Files in shared ISO directory:"
+            find "$GITHUB_WORKSPACE/.slitaz/iso" \
+              -maxdepth 1 \
               -type f \
-              \( -name "*.iso" -o -name "*.img" \) \
-              -print
+              -print \
+              2>/dev/null || true
 
             exit 1
           fi
 
           SIZE=$(stat -c "%s" "$ISO")
 
-          echo "Verified ISO:"
-          file "$ISO"
-          ls -lh "$ISO"
-
           if [ "$SIZE" -lt 1000000 ]; then
             echo "ERROR: ISO is too small."
             exit 1
           fi
 
-      - name: Measure ISO
+          echo "ISO verified successfully."
+
+          file "$ISO"
+          ls -lh "$ISO"
+
+      - name: Measure ISO size
         run: |
-          ISO="$GITHUB_WORKSPACE/.slitaz/x86_64/distro/TinyOS.iso"
+          ISO="$GITHUB_WORKSPACE/.slitaz/iso/TinyOS.iso"
 
           SIZE_MB=$(du -m "$ISO" | cut -f1)
 
-          echo "================================"
-          echo "TinyOS ISO size: ${SIZE_MB} MB"
-          echo "================================"
+          echo "======================================"
+          echo "MEGHRAJ OS ISO SIZE: ${SIZE_MB} MB"
+          echo "======================================"
 
           if [ "$SIZE_MB" -le 50 ]; then
             echo "50 MB TARGET ACHIEVED"
           else
             echo "Above 50 MB."
-            echo "We can optimize after bootability is confirmed."
+            echo "We will optimize after successful boot."
           fi
 
       - name: Upload TinyOS ISO
         uses: actions/upload-artifact@v6
         with:
-          name: TinyOS-ISO
-          path: ".slitaz/x86_64/distro/TinyOS.iso"
+          name: MEGHRAJ-OS-ISO
+          path: ".slitaz/iso/TinyOS.iso"
           if-no-files-found: error
