@@ -1,4 +1,4 @@
-name: Build TinyOS
+name: Build MEGHRAJ OS
 
 on:
   workflow_dispatch:
@@ -46,38 +46,32 @@ jobs:
         run: |
           ./tazlab check
 
-      - name: Create SliTaz x86_64 environment
+      - name: Create SliTaz environment
         working-directory: tazlab
         run: |
           ./tazlab setup x86_64
 
-      - name: Install TinyOS packages
+      - name: Install MEGHRAJ OS packages
         working-directory: tazlab
         run: |
           ./tazlab run x86_64 '
             set -e
 
-            echo "Refreshing package database..."
+            echo "Updating package database..."
             tazpkg recharge
 
             echo "Installing TazLito..."
             tazpkg get-install tazlito
 
-            echo "Installing ISO creation tools..."
+            echo "Installing ISO tools..."
             tazpkg get-install cdrkit
-
             tazpkg get-install syslinux || true
-
-            echo "Checking ISO tools..."
-            command -v genisoimage
 
             echo "Installing Firefox..."
             tazpkg get-install firefox
 
-            echo "Installing X server..."
+            echo "Installing X..."
             tazpkg get-install xorg-server
-
-            echo "Installing X initialization..."
             tazpkg get-install xorg-xinit
 
             echo "Installing Openbox..."
@@ -96,16 +90,19 @@ jobs:
             echo "Installing D-Bus..."
             tazpkg get-install dbus
 
-            echo "TinyOS packages installed."
+            echo "Packages installed."
           '
 
-      - name: Configure TinyOS
+      - name: Configure MEGHRAJ OS
         working-directory: tazlab
         run: |
           ./tazlab run x86_64 '
             set -e
 
-            echo "tinyos" > /etc/hostname
+            echo "Setting hostname..."
+            echo "meghrajos" > /etc/hostname
+
+            echo "Creating OS information..."
 
             cat > /etc/os-release << "EOF"
             PRETTY_NAME="MEGHRAJ OS"
@@ -177,7 +174,7 @@ jobs:
             </openbox_config>
             EOF
 
-            echo "Creating MEGHRAJ right-click menu..."
+            echo "Creating right-click MEGHRAJ menu..."
 
             cat > /etc/xdg/openbox/menu.xml << "EOF"
             <?xml version="1.0" encoding="UTF-8"?>
@@ -200,7 +197,7 @@ jobs:
 
                 <item label="Terminal">
                   <action name="Execute">
-                    <command>xterm</command>
+                    <command>xterm -title "MEGHRAJ OS Terminal"</command>
                   </action>
                 </item>
 
@@ -235,145 +232,142 @@ jobs:
 
             cat > /usr/bin/firefox-start << "EOF"
             #!/bin/sh
-            exec firefox
+            exec startx
             EOF
 
             chmod +x /usr/bin/firefox-start
 
-            echo "Creating TinyOS terminal launcher..."
-
-            cat > /usr/bin/meghraj-terminal << "EOF"
-            #!/bin/sh
-            exec xterm -title "MEGHRAJ OS"
-            EOF
-
-            chmod +x /usr/bin/meghraj-terminal
-
-            echo "Cleaning unnecessary files..."
+            echo "Cleaning caches..."
 
             rm -rf /var/cache/tazpkg/*
             rm -rf /var/log/*
             rm -rf /tmp/*
             rm -rf /var/tmp/*
 
+            echo "Cleaning documentation..."
+
             rm -rf /usr/share/doc/*
             rm -rf /usr/share/info/*
             rm -rf /usr/share/man/*
 
-            echo "TinyOS configuration complete."
+            echo "MEGHRAJ OS configuration complete."
           '
 
-      - name: Build TinyOS ISO
+      - name: Build ISO in private TazLito directory
         working-directory: tazlab
         run: |
           ./tazlab run x86_64 '
             set -e
 
+            echo "Preparing original SliTaz ISO..."
+
             SOURCE_ISO="/home/slitaz/iso/slitaz-base-x86_64-cooking.iso"
 
-            echo "Source ISO:"
-            echo "$SOURCE_ISO"
-
             if [ ! -f "$SOURCE_ISO" ]; then
-              echo "ERROR: Source SliTaz ISO not found."
+              echo "ERROR: Source ISO not found:"
+              echo "$SOURCE_ISO"
               exit 1
             fi
-
-            echo "Preparing source ISO mount..."
 
             mkdir -p /media/cdrom
 
             if mountpoint -q /media/cdrom; then
-              umount /media/cdrom
+              umount /media/cdrom || true
             fi
 
             mount -o loop,ro "$SOURCE_ISO" /media/cdrom
 
-            echo "Checking boot files..."
+            echo "Checking source boot files..."
 
-            ls -la /media/cdrom/boot || true
-            ls -la /media/cdrom/boot/isolinux || true
+            test -f /media/cdrom/boot/bzImage
+            test -d /media/cdrom/boot/isolinux
 
-            if [ ! -d /media/cdrom/boot/isolinux ]; then
-              echo "ERROR: Source ISO does not contain the required isolinux directory."
+            echo "Patching TazLito output directory..."
+
+            TAZLITO="/usr/bin/tazlito"
+
+            if [ ! -f "$TAZLITO" ]; then
+              echo "ERROR: TazLito not found."
               exit 1
             fi
 
-            echo "Unmounting TazLab shared distro directory..."
+            cp "$TAZLITO" /tmp/tazlito-original
 
-            if mountpoint -q /home/slitaz/distro; then
-              umount /home/slitaz/distro
-            fi
+            sed \
+              "s|DISTRO='/home/slitaz/distro'|DISTRO='/tmp/meghraj-distro'|" \
+              /tmp/tazlito-original \
+              > /tmp/tazlito-meghraj
 
-            rm -rf /home/slitaz/distro
-            mkdir -p /home/slitaz/distro
+            chmod +x /tmp/tazlito-meghraj
 
-            echo "Preparing ISO output directory..."
+            echo "Creating private build directory..."
 
-            mkdir -p /home/slitaz/iso
+            rm -rf /tmp/meghraj-distro
+            mkdir -p /tmp/meghraj-distro
 
-            rm -f /home/slitaz/iso/TinyOS.iso
-            rm -f /home/slitaz/iso/TinyOS.md5
-
-            echo "Running TazLito..."
+            echo "Building MEGHRAJ OS ISO..."
 
             LaunchedByTazpanel=1 \
-              tazlito writeiso lzma TinyOS
+              /tmp/tazlito-meghraj writeiso lzma MEGHRAJ-OS
 
-            echo "Checking TazLito output..."
+            echo "Checking private ISO..."
 
-            if [ ! -f /home/slitaz/distro/TinyOS.iso ]; then
-              echo "ERROR: TazLito did not create TinyOS.iso."
+            if [ ! -f /tmp/meghraj-distro/MEGHRAJ-OS.iso ]; then
+              echo "ERROR: Private ISO was not created."
 
-              echo "Distro directory:"
-              find /home/slitaz/distro \
+              echo "Private distro contents:"
+              find /tmp/meghraj-distro \
                 -maxdepth 3 \
                 -type f \
-                -print 2>/dev/null || true
+                -print \
+                2>/dev/null || true
 
               exit 1
             fi
 
-            SIZE=$(stat -c "%s" /home/slitaz/distro/TinyOS.iso)
+            SIZE=$(stat -c "%s" /tmp/meghraj-distro/MEGHRAJ-OS.iso)
 
-            echo "Generated ISO size:"
+            echo "Private ISO size:"
             echo "$SIZE bytes"
 
             if [ "$SIZE" -lt 1000000 ]; then
-              echo "ERROR: ISO is suspiciously small."
+              echo "ERROR: Generated ISO is suspiciously small."
               exit 1
             fi
 
-            echo "Copying final ISO to shared GitHub directory..."
+            echo "Copying final ISO into TazLab shared directory..."
 
-            cp -f \
-              /home/slitaz/distro/TinyOS.iso \
-              /home/slitaz/iso/TinyOS.iso
+            mkdir -p /home/slitaz/iso
 
-            cp -f \
-              /home/slitaz/distro/TinyOS.md5 \
-              /home/slitaz/iso/TinyOS.md5 \
-              2>/dev/null || true
+            cp \
+              /tmp/meghraj-distro/MEGHRAJ-OS.iso \
+              /home/slitaz/iso/MEGHRAJ-OS.iso
 
-            echo "Final ISO:"
-            ls -lh /home/slitaz/iso/TinyOS.iso
+            if [ -f /tmp/meghraj-distro/MEGHRAJ-OS.md5 ]; then
+              cp \
+                /tmp/meghraj-distro/MEGHRAJ-OS.md5 \
+                /home/slitaz/iso/MEGHRAJ-OS.md5
+            fi
+
+            echo "Final ISO copied."
+
+            ls -lh /home/slitaz/iso/MEGHRAJ-OS.iso
 
             echo "Unmounting source ISO..."
 
             umount /media/cdrom || true
           '
 
-      - name: Verify generated ISO
+      - name: Verify final ISO
         run: |
-          ISO="$GITHUB_WORKSPACE/.slitaz/iso/TinyOS.iso"
+          ISO="$GITHUB_WORKSPACE/.slitaz/iso/MEGHRAJ-OS.iso"
 
-          echo "Checking final ISO:"
+          echo "Checking:"
           echo "$ISO"
 
           if [ ! -f "$ISO" ]; then
-            echo "ERROR: TinyOS.iso was not created."
+            echo "ERROR: MEGHRAJ-OS.iso was not created."
 
-            echo "Files in shared ISO directory:"
             find "$GITHUB_WORKSPACE/.slitaz/iso" \
               -maxdepth 1 \
               -type f \
@@ -385,19 +379,22 @@ jobs:
 
           SIZE=$(stat -c "%s" "$ISO")
 
+          echo "ISO bytes:"
+          echo "$SIZE"
+
           if [ "$SIZE" -lt 1000000 ]; then
             echo "ERROR: ISO is too small."
             exit 1
           fi
 
-          echo "ISO verified successfully."
+          echo "ISO verified."
 
           file "$ISO"
           ls -lh "$ISO"
 
       - name: Measure ISO size
         run: |
-          ISO="$GITHUB_WORKSPACE/.slitaz/iso/TinyOS.iso"
+          ISO="$GITHUB_WORKSPACE/.slitaz/iso/MEGHRAJ-OS.iso"
 
           SIZE_MB=$(du -m "$ISO" | cut -f1)
 
@@ -409,12 +406,12 @@ jobs:
             echo "50 MB TARGET ACHIEVED"
           else
             echo "Above 50 MB."
-            echo "We will optimize after successful boot."
+            echo "We can optimize after bootability is confirmed."
           fi
 
-      - name: Upload TinyOS ISO
+      - name: Upload MEGHRAJ OS ISO
         uses: actions/upload-artifact@v6
         with:
           name: MEGHRAJ-OS-ISO
-          path: ".slitaz/iso/TinyOS.iso"
+          path: ".slitaz/iso/MEGHRAJ-OS.iso"
           if-no-files-found: error
