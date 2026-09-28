@@ -14,7 +14,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Install host build tools
+      - name: Install host tools
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -26,8 +26,7 @@ jobs:
             file \
             util-linux \
             kmod \
-            sudo \
-            python3-pil
+            sudo
 
       - name: Download TazLab
         run: |
@@ -52,123 +51,29 @@ jobs:
         run: |
           ./tazlab setup x86_64
 
-      - name: Create MEGHRAJ wallpaper
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/.slitaz/x86_64/distro"
-
-          python3 - << 'PY'
-          from PIL import Image, ImageDraw, ImageFont
-
-          width = 1600
-          height = 900
-
-          img = Image.new("RGB", (width, height))
-          pixels = img.load()
-
-          # Very dark lightweight background.
-          for y in range(height):
-              for x in range(width):
-                  r = 3 + int(7 * y / height)
-                  g = 6 + int(10 * y / height)
-                  b = 14 + int(25 * y / height)
-                  pixels[x, y] = (r, g, b)
-
-          draw = ImageDraw.Draw(img)
-
-          font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-
-          try:
-              title_font = ImageFont.truetype(font_path, 170)
-              subtitle_font = ImageFont.truetype(font_path, 34)
-          except Exception:
-              title_font = ImageFont.load_default()
-              subtitle_font = ImageFont.load_default()
-
-          title = "MEGHRAJ"
-          subtitle = "TINY LINUX"
-
-          box = draw.textbbox((0, 0), title, font=title_font)
-          tw = box[2] - box[0]
-          th = box[3] - box[1]
-
-          x = (width - tw) // 2
-          y = (height - th) // 2 - 45
-
-          # Simple blue glow.
-          for offset in range(14, 0, -2):
-              draw.text(
-                  (x + offset // 3, y + offset // 3),
-                  title,
-                  font=title_font,
-                  fill=(20, 65, 170)
-              )
-
-          draw.text(
-              (x, y),
-              title,
-              font=title_font,
-              fill=(235, 245, 255)
-          )
-
-          sb = draw.textbbox((0, 0), subtitle, font=subtitle_font)
-          sw = sb[2] - sb[0]
-
-          draw.text(
-              ((width - sw) // 2, y + th + 35),
-              subtitle,
-              font=subtitle_font,
-              fill=(110, 155, 215)
-          )
-
-          line_y = y + th + 95
-
-          draw.rectangle(
-              (
-                  width // 2 - 180,
-                  line_y,
-                  width // 2 + 180,
-                  line_y + 3
-              ),
-              fill=(70, 145, 255)
-          )
-
-          output = "$GITHUB_WORKSPACE/.slitaz/x86_64/distro/meghraj.png"
-          img.save(output, optimize=True)
-
-          print("Wallpaper created:", output)
-          PY
-
-          ls -lh "$GITHUB_WORKSPACE/.slitaz/x86_64/distro/meghraj.png"
-
       - name: Install TinyOS packages
         working-directory: tazlab
         run: |
           ./tazlab run x86_64 '
             set -e
 
-            echo "Refreshing SliTaz package database..."
+            echo "Refreshing package database..."
             tazpkg recharge
 
             echo "Installing TazLito..."
             tazpkg get-install tazlito
 
-            echo "Installing ISO generation tools..."
+            echo "Installing ISO tools..."
             if ! command -v genisoimage >/dev/null 2>&1; then
               tazpkg get-install cdrkit
             fi
 
             if ! command -v isohybrid >/dev/null 2>&1; then
-              tazpkg get-install syslinux
+              tazpkg get-install syslinux || true
             fi
 
             echo "Checking ISO tools..."
             command -v genisoimage
-
-            if command -v isohybrid >/dev/null 2>&1; then
-              echo "isohybrid available"
-            else
-              echo "isohybrid unavailable - ISO will still be generated"
-            fi
 
             echo "Installing Firefox..."
             tazpkg get-install firefox
@@ -181,9 +86,6 @@ jobs:
 
             echo "Installing Openbox..."
             tazpkg get-install openbox
-
-            echo "Installing wallpaper tool..."
-            tazpkg get-install hsetroot
 
             echo "Installing terminal..."
             tazpkg get-install xterm
@@ -198,27 +100,10 @@ jobs:
             echo "Installing D-Bus..."
             tazpkg get-install dbus
 
-            echo "All required packages installed."
+            echo "TinyOS packages installed."
           '
 
-      - name: Install wallpaper into TinyOS
-        working-directory: tazlab
-        run: |
-          ./tazlab run x86_64 '
-            set -e
-
-            mkdir -p /usr/share/backgrounds
-
-            cp /home/slitaz/distro/meghraj.png \
-              /usr/share/backgrounds/meghraj.png
-
-            test -f /usr/share/backgrounds/meghraj.png
-
-            echo "Wallpaper installed:"
-            ls -lh /usr/share/backgrounds/meghraj.png
-          '
-
-      - name: Configure TinyOS desktop
+      - name: Configure TinyOS
         working-directory: tazlab
         run: |
           ./tazlab run x86_64 '
@@ -235,23 +120,66 @@ jobs:
             ID_LIKE=slitaz
             EOF
 
-            echo "Creating X session..."
+            echo "Creating X startup..."
+
+            mkdir -p /etc/X11/xinit
 
             cat > /etc/X11/xinit/xinitrc << "EOF"
             #!/bin/sh
-
-            hsetroot -fill /usr/share/backgrounds/meghraj.png &
-
-            sleep 1
 
             exec openbox-session
             EOF
 
             chmod +x /etc/X11/xinit/xinitrc
 
-            echo "Creating Openbox menu..."
+            echo "Creating Openbox configuration..."
 
             mkdir -p /etc/xdg/openbox
+
+            cat > /etc/xdg/openbox/rc.xml << "EOF"
+            <?xml version="1.0" encoding="UTF-8"?>
+
+            <openbox_config
+              xmlns="http://openbox.org/3.5/rc"
+              xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+              xsi:schemaLocation="http://openbox.org/3.5/rc
+              https://openbox.org/3.5/rc">
+
+              <focus>
+                <focusNew>yes</focusNew>
+                <followMouse>no</followMouse>
+                <focusLast>yes</focusLast>
+                <underMouse>no</underMouse>
+                <lastFocusNewWindow>no</lastFocusNewWindow>
+              </focus>
+
+              <placement>
+                <policy>Smart</policy>
+              </placement>
+
+              <mouse>
+                <context name="Root">
+                  <mousebind button="Right" action="Press">
+                    <action name="ShowMenu">
+                      <menu>root-menu</menu>
+                    </action>
+                  </mousebind>
+                </context>
+              </mouse>
+
+              <menu>
+                <file>/etc/xdg/openbox/menu.xml</file>
+              </menu>
+
+              <desktops>
+                <number>1</number>
+                <firstdesk>1</firstdesk>
+              </desktops>
+
+            </openbox_config>
+            EOF
+
+            echo "Creating MEGHRAJ right-click menu..."
 
             cat > /etc/xdg/openbox/menu.xml << "EOF"
             <?xml version="1.0" encoding="UTF-8"?>
@@ -262,7 +190,9 @@ jobs:
               xsi:schemaLocation="http://openbox.org/
               file:///usr/share/openbox/menu.xsd">
 
-              <menu id="root-menu" label="TinyOS">
+              <menu id="root-menu" label="MEGHRAJ OS">
+
+                <separator label="MEGHRAJ OS" />
 
                 <item label="Firefox">
                   <action name="Execute">
@@ -291,6 +221,7 @@ jobs:
                 </item>
 
               </menu>
+
             </openbox_menu>
             EOF
 
@@ -298,7 +229,7 @@ jobs:
 
             cat > /usr/bin/firefox-start << "EOF"
             #!/bin/sh
-            exec firefox
+            exec startx
             EOF
 
             chmod +x /usr/bin/firefox-start
@@ -314,7 +245,7 @@ jobs:
             rm -rf /usr/share/info/*
             rm -rf /usr/share/man/*
 
-            echo "TinyOS desktop configuration complete."
+            echo "TinyOS configuration complete."
           '
 
       - name: Build TinyOS ISO
@@ -323,17 +254,17 @@ jobs:
           ./tazlab run x86_64 '
             set -e
 
-            echo "Checking required ISO tools..."
+            echo "Checking ISO generator..."
 
             command -v genisoimage
 
             if command -v isohybrid >/dev/null 2>&1; then
-              echo "isohybrid detected."
+              echo "isohybrid is available."
             else
-              echo "WARNING: isohybrid not detected."
+              echo "WARNING: isohybrid not available."
             fi
 
-            echo "Starting TazLito..."
+            echo "Building TinyOS ISO..."
 
             rm -f /home/slitaz/distro/TinyOS.iso
             rm -f /home/slitaz/distro/TinyOS.md5
@@ -343,24 +274,28 @@ jobs:
 
             echo "Checking generated ISO..."
 
-            test -f /home/slitaz/distro/TinyOS.iso
+            if [ ! -f /home/slitaz/distro/TinyOS.iso ]; then
+              echo "ERROR: TinyOS.iso was not created."
 
-            SIZE=$(stat -c "%s" /home/slitaz/distro/TinyOS.iso)
-
-            echo "ISO size in bytes:"
-            echo "$SIZE"
-
-            if [ "$SIZE" -lt 1000000 ]; then
-              echo "ERROR: Generated ISO is suspiciously small."
-              echo "Distro directory:"
               find /home/slitaz/distro \
-                -maxdepth 2 \
+                -maxdepth 3 \
                 -type f \
                 -exec ls -lh {} \;
+
               exit 1
             fi
 
-            echo "TinyOS ISO successfully created."
+            SIZE=$(stat -c "%s" /home/slitaz/distro/TinyOS.iso)
+
+            echo "ISO size: $SIZE bytes"
+
+            if [ "$SIZE" -lt 1000000 ]; then
+              echo "ERROR: ISO is suspiciously small."
+
+              exit 1
+            fi
+
+            echo "TinyOS ISO created successfully."
 
             ls -lh /home/slitaz/distro/TinyOS.iso
           '
@@ -369,11 +304,8 @@ jobs:
         run: |
           ISO="$GITHUB_WORKSPACE/.slitaz/x86_64/distro/TinyOS.iso"
 
-          echo "Checking:"
-          echo "$ISO"
-
           if [ ! -f "$ISO" ]; then
-            echo "ERROR: TinyOS ISO was not found."
+            echo "ERROR: TinyOS ISO not found."
 
             find "$GITHUB_WORKSPACE/.slitaz" \
               -type f \
@@ -385,30 +317,30 @@ jobs:
 
           SIZE=$(stat -c "%s" "$ISO")
 
-          if [ "$SIZE" -lt 1000000 ]; then
-            echo "ERROR: ISO is too small to be valid."
-            exit 1
-          fi
-
-          echo "ISO verified."
+          echo "Verified ISO:"
           file "$ISO"
           ls -lh "$ISO"
 
-      - name: Measure ISO size
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "ERROR: ISO is too small."
+            exit 1
+          fi
+
+      - name: Measure ISO
         run: |
           ISO="$GITHUB_WORKSPACE/.slitaz/x86_64/distro/TinyOS.iso"
 
           SIZE_MB=$(du -m "$ISO" | cut -f1)
 
-          echo "======================================"
+          echo "================================"
           echo "TinyOS ISO size: ${SIZE_MB} MB"
-          echo "======================================"
+          echo "================================"
 
           if [ "$SIZE_MB" -le 50 ]; then
             echo "50 MB TARGET ACHIEVED"
           else
             echo "Above 50 MB."
-            echo "Bootability comes first; we can optimize afterward."
+            echo "We can optimize after bootability is confirmed."
           fi
 
       - name: Upload TinyOS ISO
