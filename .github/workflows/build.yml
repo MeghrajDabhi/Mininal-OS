@@ -21,13 +21,12 @@ jobs:
             cpio \
             gzip \
             xz-utils \
-            mercurial \
             rsync \
-            sudo \
+            wget \
+            file \
             util-linux \
             kmod \
-            wget \
-            file
+            sudo
 
       - name: Download TazLab
         run: |
@@ -40,9 +39,10 @@ jobs:
           TAZLAB_HOME: ${{ github.workspace }}/.slitaz
         run: |
           ./tazlab check || true
+          ./tazlab config || true
           ./tazlab --version || true
 
-      - name: Create SliTaz build environment
+      - name: Create x86_64 SliTaz environment
         working-directory: tazlab
         env:
           TAZLAB_HOME: ${{ github.workspace }}/.slitaz
@@ -57,7 +57,7 @@ jobs:
           ./tazlab run x86_64 '
             set -e
 
-            echo "Refreshing SliTaz package database..."
+            echo "Refreshing package database..."
             tazpkg recharge
 
             echo "Installing TazLito..."
@@ -66,19 +66,14 @@ jobs:
             echo "Installing Firefox..."
             tazpkg get-install firefox
 
-            echo "Installing minimal X server..."
+            echo "Installing X server..."
             tazpkg get-install xorg-server
 
-            echo "Installing X startup tools..."
+            echo "Installing X initialization..."
             tazpkg get-install xorg-xinit
 
-            echo "Installing Wi-Fi support..."
-            tazpkg get-install linux64-wireless || tazpkg get-install linux-wireless
-
-            echo "Installing WPA support..."
+            echo "Installing Wi-Fi tools..."
             tazpkg get-install wpa_supplicant
-
-            echo "Installing DHCP..."
             tazpkg get-install dhcpcd
 
             echo "Installing Bluetooth..."
@@ -87,7 +82,7 @@ jobs:
             echo "Installing D-Bus..."
             tazpkg get-install dbus
 
-            echo "Package installation complete."
+            echo "Packages installed."
           '
 
       - name: Configure TinyOS
@@ -98,32 +93,12 @@ jobs:
           ./tazlab run x86_64 '
             set -e
 
-            echo "Creating TinyOS user..."
-            if ! id meghraj >/dev/null 2>&1; then
-              adduser -D -H -s /bin/sh meghraj
-            fi
+            echo "Creating TinyOS identity..."
 
-            mkdir -p /home/meghraj
-            chown meghraj:meghraj /home/meghraj
-
-            echo "Creating Firefox X session..."
-            cat > /home/meghraj/.xinitrc << "EOF"
-            #!/bin/sh
-            exec firefox
+            cat > /etc/hostname << "EOF"
+            tinyos
             EOF
 
-            chmod +x /home/meghraj/.xinitrc
-            chown meghraj:meghraj /home/meghraj/.xinitrc
-
-            echo "Creating Firefox launcher..."
-            cat > /usr/bin/firefox-start << "EOF"
-            #!/bin/sh
-            exec su - meghraj -c "startx"
-            EOF
-
-            chmod +x /usr/bin/firefox-start
-
-            echo "Creating OS identity..."
             cat > /etc/os-release << "EOF"
             PRETTY_NAME="TinyOS"
             NAME="TinyOS"
@@ -133,26 +108,33 @@ jobs:
             ID_LIKE=slitaz
             EOF
 
-            echo "TinyOS" > /etc/hostname
+            echo "Creating Firefox launcher..."
 
-            echo "Cleaning unnecessary data..."
+            cat > /usr/bin/firefox-start << "EOF"
+            #!/bin/sh
+            exec startx
+            EOF
+
+            chmod +x /usr/bin/firefox-start
+
+            echo "Creating X session..."
+
+            cat > /root/.xinitrc << "EOF"
+            #!/bin/sh
+            exec firefox
+            EOF
+
+            echo "Cleaning unnecessary files..."
 
             rm -rf /var/cache/tazpkg/*
             rm -rf /var/log/*
-            rm -rf /tmp/*
 
             rm -rf /usr/share/doc/*
             rm -rf /usr/share/info/*
             rm -rf /usr/share/man/*
 
-            if [ -d /usr/share/locale ]; then
-              find /usr/share/locale -mindepth 1 -maxdepth 1 \
-                ! -name "C" \
-                ! -name "POSIX" \
-                ! -name "en" \
-                ! -name "en_US" \
-                -exec rm -rf {} +
-            fi
+            rm -rf /tmp/*
+            rm -rf /var/tmp/*
 
             echo "TinyOS configuration complete."
           '
@@ -165,69 +147,79 @@ jobs:
           ./tazlab run x86_64 '
             set -e
 
-            mkdir -p /media/cdrom
+            echo "Starting TazLito ISO generation..."
 
-            ISO_FILE=$(find /home/slitaz/iso -maxdepth 1 -type f -name "*.iso" | head -n 1)
+            mkdir -p /home/slitaz/iso
 
-            if [ -z "$ISO_FILE" ]; then
-              echo "ERROR: Original SliTaz ISO was not found."
+            rm -f /home/slitaz/iso/TinyOS.iso
+
+            tazlito writeiso lzma TinyOS
+
+            echo "Searching for generated ISO..."
+
+            find /home/slitaz \
+              -type f \
+              -name "*.iso" \
+              -print
+
+            FOUND_ISO=$(find /home/slitaz \
+              -type f \
+              -name "*.iso" \
+              ! -path "/home/slitaz/iso/TinyOS.iso" \
+              | head -n 1)
+
+            if [ -z "$FOUND_ISO" ]; then
+              echo "ERROR: TazLito did not create an ISO."
               exit 1
             fi
 
-            echo "Using boot source:"
-            echo "$ISO_FILE"
+            echo "Found:"
+            echo "$FOUND_ISO"
 
-            mount -o loop,ro "$ISO_FILE" /media/cdrom
+            cp "$FOUND_ISO" /home/slitaz/iso/TinyOS.iso
 
-            mkdir -p /home/slitaz/distro
-
-            echo "Generating TinyOS ISO..."
-
-            cd /
-
-            printf "y\n" | \
-              LaunchedByTazpanel=1 \
-              tazlito writeiso lzma TinyOS
-
-            umount /media/cdrom || true
-
-            echo "ISO generation finished."
+            echo "Copied ISO to shared directory:"
+            ls -lh /home/slitaz/iso/TinyOS.iso
           '
 
-      - name: Find ISO
+      - name: Verify generated ISO
         run: |
-          echo "Searching for TinyOS ISO..."
+          echo "Checking shared ISO directory..."
 
-          find . \
+          find .slitaz/iso \
+            -maxdepth 1 \
             -type f \
-            \( -name "TinyOS.iso" -o -name "*.iso" \) \
-            -print
+            -print \
+            -exec ls -lh {} \;
 
-      - name: Measure ISO size
-        run: |
-          ISO=$(find . -type f -name "TinyOS.iso" | head -n 1)
+          ISO=".slitaz/iso/TinyOS.iso"
 
-          if [ -z "$ISO" ]; then
-            echo "ERROR: TinyOS.iso was not created."
+          if [ ! -f "$ISO" ]; then
+            echo "ERROR: TinyOS.iso was not copied to the GitHub workspace."
             exit 1
           fi
 
-          SIZE=$(du -m "$ISO" | cut -f1)
+          echo "TinyOS ISO found."
 
-          echo "================================"
-          echo "TinyOS ISO size: ${SIZE} MB"
-          echo "================================"
+      - name: Measure ISO
+        run: |
+          ISO=".slitaz/iso/TinyOS.iso"
 
-          if [ "$SIZE" -le 50 ]; then
-            echo "TARGET ACHIEVED: ISO is 50 MB or smaller."
+          SIZE_MB=$(du -m "$ISO" | cut -f1)
+
+          echo "======================================"
+          echo "TinyOS ISO size: ${SIZE_MB} MB"
+          echo "======================================"
+
+          if [ "$SIZE_MB" -le 50 ]; then
+            echo "50 MB TARGET ACHIEVED"
           else
-            echo "TARGET NOT YET ACHIEVED."
-            echo "We can optimize the image further."
+            echo "Above 50 MB - optimization will be needed"
           fi
 
       - name: Upload TinyOS ISO
         uses: actions/upload-artifact@v6
         with:
           name: TinyOS-ISO
-          path: "**/TinyOS.iso"
+          path: ".slitaz/iso/TinyOS.iso"
           if-no-files-found: error
