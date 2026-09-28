@@ -1,0 +1,233 @@
+name: Build TinyOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cpio \
+            gzip \
+            xz-utils \
+            mercurial \
+            rsync \
+            sudo \
+            util-linux \
+            kmod \
+            wget \
+            file
+
+      - name: Download TazLab
+        run: |
+          git clone https://github.com/pankso/tazlab.git
+          chmod +x tazlab/tazlab
+
+      - name: Check TazLab
+        working-directory: tazlab
+        env:
+          TAZLAB_HOME: ${{ github.workspace }}/.slitaz
+        run: |
+          ./tazlab check || true
+          ./tazlab --version || true
+
+      - name: Create SliTaz build environment
+        working-directory: tazlab
+        env:
+          TAZLAB_HOME: ${{ github.workspace }}/.slitaz
+        run: |
+          ./tazlab setup x86_64
+
+      - name: Install TinyOS packages
+        working-directory: tazlab
+        env:
+          TAZLAB_HOME: ${{ github.workspace }}/.slitaz
+        run: |
+          ./tazlab run x86_64 '
+            set -e
+
+            echo "Refreshing SliTaz package database..."
+            tazpkg recharge
+
+            echo "Installing TazLito..."
+            tazpkg get-install tazlito
+
+            echo "Installing Firefox..."
+            tazpkg get-install firefox
+
+            echo "Installing minimal X server..."
+            tazpkg get-install xorg-server
+
+            echo "Installing X startup tools..."
+            tazpkg get-install xorg-xinit
+
+            echo "Installing Wi-Fi support..."
+            tazpkg get-install linux64-wireless || tazpkg get-install linux-wireless
+
+            echo "Installing WPA support..."
+            tazpkg get-install wpa_supplicant
+
+            echo "Installing DHCP..."
+            tazpkg get-install dhcpcd
+
+            echo "Installing Bluetooth..."
+            tazpkg get-install bluez
+
+            echo "Installing D-Bus..."
+            tazpkg get-install dbus
+
+            echo "Package installation complete."
+          '
+
+      - name: Configure TinyOS
+        working-directory: tazlab
+        env:
+          TAZLAB_HOME: ${{ github.workspace }}/.slitaz
+        run: |
+          ./tazlab run x86_64 '
+            set -e
+
+            echo "Creating TinyOS user..."
+            if ! id meghraj >/dev/null 2>&1; then
+              adduser -D -H -s /bin/sh meghraj
+            fi
+
+            mkdir -p /home/meghraj
+            chown meghraj:meghraj /home/meghraj
+
+            echo "Creating Firefox X session..."
+            cat > /home/meghraj/.xinitrc << "EOF"
+            #!/bin/sh
+            exec firefox
+            EOF
+
+            chmod +x /home/meghraj/.xinitrc
+            chown meghraj:meghraj /home/meghraj/.xinitrc
+
+            echo "Creating Firefox launcher..."
+            cat > /usr/bin/firefox-start << "EOF"
+            #!/bin/sh
+            exec su - meghraj -c "startx"
+            EOF
+
+            chmod +x /usr/bin/firefox-start
+
+            echo "Creating OS identity..."
+            cat > /etc/os-release << "EOF"
+            PRETTY_NAME="TinyOS"
+            NAME="TinyOS"
+            ID=tinyos
+            VERSION="0.1"
+            VERSION_ID="0.1"
+            ID_LIKE=slitaz
+            EOF
+
+            echo "TinyOS" > /etc/hostname
+
+            echo "Cleaning unnecessary data..."
+
+            rm -rf /var/cache/tazpkg/*
+            rm -rf /var/log/*
+            rm -rf /tmp/*
+
+            rm -rf /usr/share/doc/*
+            rm -rf /usr/share/info/*
+            rm -rf /usr/share/man/*
+
+            if [ -d /usr/share/locale ]; then
+              find /usr/share/locale -mindepth 1 -maxdepth 1 \
+                ! -name "C" \
+                ! -name "POSIX" \
+                ! -name "en" \
+                ! -name "en_US" \
+                -exec rm -rf {} +
+            fi
+
+            echo "TinyOS configuration complete."
+          '
+
+      - name: Build TinyOS ISO
+        working-directory: tazlab
+        env:
+          TAZLAB_HOME: ${{ github.workspace }}/.slitaz
+        run: |
+          ./tazlab run x86_64 '
+            set -e
+
+            mkdir -p /media/cdrom
+
+            ISO_FILE=$(find /home/slitaz/iso -maxdepth 1 -type f -name "*.iso" | head -n 1)
+
+            if [ -z "$ISO_FILE" ]; then
+              echo "ERROR: Original SliTaz ISO was not found."
+              exit 1
+            fi
+
+            echo "Using boot source:"
+            echo "$ISO_FILE"
+
+            mount -o loop,ro "$ISO_FILE" /media/cdrom
+
+            mkdir -p /home/slitaz/distro
+
+            echo "Generating TinyOS ISO..."
+
+            cd /
+
+            printf "y\n" | \
+              LaunchedByTazpanel=1 \
+              tazlito writeiso lzma TinyOS
+
+            umount /media/cdrom || true
+
+            echo "ISO generation finished."
+          '
+
+      - name: Find ISO
+        run: |
+          echo "Searching for TinyOS ISO..."
+
+          find . \
+            -type f \
+            \( -name "TinyOS.iso" -o -name "*.iso" \) \
+            -print
+
+      - name: Measure ISO size
+        run: |
+          ISO=$(find . -type f -name "TinyOS.iso" | head -n 1)
+
+          if [ -z "$ISO" ]; then
+            echo "ERROR: TinyOS.iso was not created."
+            exit 1
+          fi
+
+          SIZE=$(du -m "$ISO" | cut -f1)
+
+          echo "================================"
+          echo "TinyOS ISO size: ${SIZE} MB"
+          echo "================================"
+
+          if [ "$SIZE" -le 50 ]; then
+            echo "TARGET ACHIEVED: ISO is 50 MB or smaller."
+          else
+            echo "TARGET NOT YET ACHIEVED."
+            echo "We can optimize the image further."
+          fi
+
+      - name: Upload TinyOS ISO
+        uses: actions/upload-artifact@v6
+        with:
+          name: TinyOS-ISO
+          path: "**/TinyOS.iso"
+          if-no-files-found: error
